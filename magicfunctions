@@ -1,0 +1,401 @@
+#!/usr/bin/env python3
+#
+
+# JSONs that initialize importdefinition and sourcestructure
+#
+
+imp = {
+	"version" : "",
+	"name" : "",
+	"importsources" : 
+		{
+			"validation" : "",
+			"table" : "",
+			"importsource" : []
+		},
+	"importtargets" : 
+		{
+			"overridevalidation" : "true",
+			"onreject" : "skip_record",
+			"allownew" : "true",
+			"importtarget" : []
+		},
+	"importcouples" : {
+		"importcouple" : []
+	}
+}
+
+ss = {
+	"date" : "",
+	"databasetable" : {
+		"databasetablename" : "",
+		"fields" : {
+			"field" : []
+		}
+	}
+}
+
+
+
+# Main functions
+#
+
+
+def getvaluetype(y):
+	y = str(type(y))
+	y = y.split("'")
+	y = y[1]
+	if y.startswith("datetime"):
+		return "date"
+	elif y == "int":
+		return "integer"
+	elif y == "float":
+		return "float8"
+	elif y == "bool":
+		return "boolean"
+	else:
+		return "memo"
+
+def srcstrentry(sourcefield, fieldtype):
+	output = {}
+	output["type"] = fieldtype
+	output["allowsnull"] = "false"
+	origname = sourcefield
+	chars = " %:=?!+,#&@()'.$*\\/[]{}|^<>"
+	for char in sourcefield:
+		if char in chars:
+			sourcefield = sourcefield.replace(char, "_")
+	if sourcefield[-1].isdigit():
+		sourcefield = sourcefield + "_"
+	if "__" in sourcefield:
+		sourcefield = re.sub(r"_+", "_", sourcefield)
+	if sourcefield != origname:
+		output["database_fieldname"] = origname
+	output["name"] = sourcefield
+	return output
+
+def setnewcards():
+	question = "   Create new cards (1 true, 2 false)"
+	key = input(f"{question: <40} -> ")
+	if key == "2":
+		return "false"
+	else:
+		return "true"
+
+def setdearchive():
+	question = "   Dearchive (1 retr, 2 ignore, 3 edit)"
+	key = input(f"{question: <40} -> ")
+	if key == "1":
+		return "retrieve"
+	if key == "3":
+		return "visible"
+	else:
+		return "invisible"
+
+def setarchive():
+	question = "   Archive other cards (1 true, 2 false)"
+	key = input(f"{question: <40} -> ")
+	if key == "1":
+		return "true"
+	else:
+		return "false"
+
+def setoverwrite(field):
+	print("Overwrite {}?\n   1 always\n   2 targetempty\n   3 sourcenotempty".format(field))
+	question = "   4 onlynew"
+	key = input(f"{question: <40} -> ")
+	if key == "2":
+		return "targetempty"
+	elif key == "3":
+		return "sourcenotempty"
+	elif key == "4":
+		return "onlynew"
+	else:
+		return "always"
+
+def setfield(option, targettable, importfield=None):
+	while True:
+		if option == 1:
+			question = "   Primary key target field"
+			field = input(f"{question: <40} -> ")
+		elif option == 2:
+			field = input(f"{importfield: <40} -> ")
+		else:
+			question = "Enter field name"
+			field = input(f"{question: <40} -> ")
+		if field not in dd[targettable]["fields"]:
+			print("   ERROR: target field not found. Try again.\n")
+		else:
+			break
+	return field
+
+def setcardtype(cardtype, targettable):
+	if cardtype == None and len(dd[targettable]["metadata"]["cardtype"]) > 1:
+		cardtypes = str(dd[targettable]["metadata"]["cardtype"])
+		cardtypes = cardtypes.replace("[", "(").replace("]", ")")
+		while True:
+			question = "   Card type " + cardtypes
+			cardtype = input(f"{question: <40} -> ")
+			if cardtype:
+				if int(cardtype) not in dd[targettable]["metadata"]["cardtype"]:
+					print("   ERROR: card type {} not found. Try again.\n".format(str(cardtype)))
+				else:
+					return cardtype
+					break
+			else:
+				return cardtype
+				break
+	elif cardtype == None and len(dd[targettable]["metadata"]["cardtype"]) == 1:
+		cardtype = 1
+		return cardtype
+	else:
+		return cardtype
+
+def inittable(option, value, sourcefieldtype, targettable, cardtype=None):
+	print("")
+	print("   Settings for table " + targettable)
+	print("   -----------------------------------------------------")
+	while True:
+		targetfield = setfield(1, targettable)
+		targetfieldtype = dd[targettable]["fields"][targetfield]["type"]
+		if option == 1:
+			availablemapping = setmapping(value, targettable, targetfield, sourcefieldtype)
+		elif option == 2:
+			availablemapping = setmapping(value, targettable, targetfield, "memo")
+		if availablemapping:
+			output = {}
+			if option == 1:
+				output["sourcepk"] = value
+			elif option == 2:
+				output["defaultvalue"] = value
+			output["targetpk"] = targetfield
+			output["datadict"] = targettable
+			output["cardtype"] = setcardtype(cardtype, targettable)
+			output["mappings"] = []
+			output["defaults"] = []
+			output["linkflds"] = []
+			output["metadata"] = []
+			mapping = (value, targetfield, "always")
+			output["mappings"].append(mapping)
+			output["metadata"].append(setnewcards())
+			output["metadata"].append(setdearchive())
+			output["metadata"].append(setarchive())
+			print("   -----------------------------------------------------")
+			print("")
+			break
+		else:
+			print("   ERROR: impossible mappings: {} to {}. Try again.\n".format(sourcefieldtype,targetfieldtype))
+	return output
+
+def initimpcpl(table):
+	importcouple = {}
+	importcouple["importtarget"] = table
+	importcouple["importsource"] = table
+	importcouple["importreplacements"] = {}
+	importcouple["importreplacements"]["importreplacement"] = []
+	return importcouple
+
+
+
+# Functions that create Foxpro expressions
+#
+
+def setbaselines(value, table, targetfield, sourcefieldtype):
+	if dd[table]["fields"][targetfield]["type"] == "text":
+		y = dd[table]["fields"][targetfield]["length"]
+		if sourcefieldtype == "memo":
+			x1 = "LOWER(SUBSTR(ALLTRIM(SUBSTR(" + value + ",1," + str(y) + ")),1," + str(y) + "))"
+			x2 = "LOWER(SUBSTR(ALLTRIM(" + targetfield + "),1," + str(y) + "))"
+		elif sourcefieldtype == "integer":
+			x1 = "LOWER(ALLTRIM(LEFT(ALLTRIM(STR(" + value + ")), " + str(y) + ")))"
+			x2 = "LOWER(ALLTRIM(" + targetfield + "))"
+		return (x1, x2)
+
+def setmapping(value, table, targetfield, sourcefieldtype):
+	if dd[table]["fields"][targetfield]["type"] == "text":
+		num = dd[table]["fields"][targetfield]["length"]
+		if sourcefieldtype == "memo":
+			string = "ALLTRIM(SUBSTR(" + value + ",1," + str(num) + "))"
+		elif sourcefieldtype == "integer":
+			string = "SUBSTR(ALLTRIM(STR(" + value + "," + str(num) + ",0)),1," + str(num) + ")"
+		elif sourcefieldtype == "float8":
+			string = "SUBSTR(ALLTRIM(STR(" + value + "," + str(num) + ",3)),1," + str(num) + ")"
+		return string
+	elif dd[table]["fields"][targetfield]["type"] == "memo":
+		if sourcefieldtype == "memo":
+			return value
+		elif sourcefieldtype == "integer":
+			string = "ALLTRIM(STR(" + value + ",21,0))"
+			return string
+		elif sourcefieldtype == "float8":
+			string = "ALLTRIM(STR(" + value + ",21,3))"
+			return string
+	elif dd[table]["fields"][targetfield]["type"] == "num":
+		if sourcefieldtype == "integer" or sourcefieldtype == "float8":
+			return value		
+	elif dd[table]["fields"][targetfield]["type"] == "date":
+		if sourcefieldtype == "date":
+			return value
+	elif dd[table]["fields"][targetfield]["type"] == "boolean":
+		if sourcefieldtype == "integer":
+			string = "IIF(NOT(ISNULL(" + value + ")), IIF(" + value + "= 1, .T., .F.), .F.)"
+			return string
+		elif sourcefieldtype == "boolean":
+			return value
+
+
+
+# Post processing functions
+#
+
+def ppcategory(categorynames, imp):
+	data = {}
+	for couple in imp["importcouples"]["importcouple"]:
+		categoryfields = 0
+		targetfields = []
+		categoryname = couple["importtarget"]
+		importreplacements = [x for x in couple["importreplacements"]["importreplacement"]]
+		for importreplacement in importreplacements:
+			if "dst_ref_expression" in importreplacement:
+				dst_ref = {}
+				linkfield = importreplacement["dst_ref_expression"]
+				linkfieldsplit = linkfield.split("//")
+				if linkfieldsplit[1] == categorynames[0] or linkfieldsplit[1] == categorynames[1]:
+					categoryfields += 1
+					dst_ref["targetfield"] = importreplacement["targetfield"]
+					dst_ref["targetname"] = linkfieldsplit[1]
+					targetfields.append(dst_ref)
+					
+		if categoryfields == 2:
+			data["table"] = categoryname
+			data["fields"] = targetfields
+			print("")
+			print("   Found category/subcategory pair in table {}".format(data["table"]))
+			print("   -----------------------------------------------------")
+			line1 = "   Main category: "
+			print(f"{line1: <40} -> {data['fields'][0]['targetfield']}")
+			line2 = "   Subcategory: "
+			print(f"{line2: <40} -> {data['fields'][1]['targetfield']}")
+			question = "   Is this correct? (y/n)"
+			question = input(f"{question: <40} -> ")
+			print("")
+			
+			if question.lower() == "y":
+				subcategory = data["fields"][1]["targetfield"]
+				subcategoryname = data["fields"][1]["targetname"]
+				parentidname = data["fields"][0]["targetname"]
+				print("   Adding parentid field to {} mapping".format(subcategory))
+			else:
+				subcategory = data["fields"][0]["targetfield"]
+				subcategoryname = data["fields"][0]["targetname"]
+				parentidname = data["fields"][1]["targetname"]
+				print("   Adding parentid field to {} mapping".format(subcategory))
+			print("")
+			
+			for source in imp["importsources"]["importsource"]:
+				if source["name"] == parentidname:
+					sourceexpr = source["representationexpression"]
+			for source in imp["importsources"]["importsource"]:
+				if source["name"] == subcategoryname:
+					newrepstring = sourceexpr + " + '$' + " + source["representationexpression"]
+					source["representationexpression"] = newrepstring
+			for target in imp["importtargets"]["importtarget"]:
+				if target["name"] == parentidname:
+					targetexpr = target["representationexpression"]
+					targetfield = targetexpr.split(")",1)[0]
+					targetfield = targetfield.rsplit("(",1)[1]
+			for target in imp["importtargets"]["importtarget"]:
+				if target["name"] == subcategoryname:
+					ntexpr = target["representationexpression"]
+					substr = targetfield
+					inserttxt = "fk_classificatie_parentid."
+					idx = target["representationexpression"].index(substr)
+					ntexpr = ntexpr[:idx] + inserttxt + ntexpr[idx:]
+					target["representationexpression"] = ntexpr + " + '$' + " + target["representationexpression"] 
+			importreplacement = {
+				"targetfield" : "parentid",
+				"src_tar_expression" : "source://" + parentidname,
+				"overwrite" : "always",
+				"newvalue" : "'UNUSED_LINK_FIELD'",
+				"dst_ref_expression" : "target://" + parentidname }
+			for couple in imp["importcouples"]["importcouple"]:
+				if couple["importtarget"] == subcategoryname:
+					couple["importreplacements"]["importreplacement"].append(importreplacement)
+	return imp
+
+
+def ppoptionalfield(imp, dd):
+	optionalfields = [x["name"] for x in imp["importtargets"]["importtarget"] if x["table"] == "vrijeopzoekvelden"]	
+	for couple in imp["importcouples"]["importcouple"]:
+		data = {}
+		categoryname = couple["importtarget"]
+		importreplacements = [x for x in couple["importreplacements"]["importreplacement"]]
+		for importreplacement in importreplacements:
+			if "dst_ref_expression" in importreplacement:
+				linkfield = importreplacement["dst_ref_expression"]
+				linkfieldsplit = linkfield.split("//")
+				if linkfieldsplit[1] in optionalfields:		
+					data["tablename"] = categoryname
+					data["targetname"] = linkfieldsplit[1]
+					data["targetfield"] = importreplacement["targetfield"]
+					data["num"] = importreplacement["targetfield"][-1]
+
+					for importtarget in imp["importtargets"]["importtarget"]:
+						if importtarget["name"] == data["tablename"]:
+							data["table"] = importtarget["table"]
+
+					codes = dd[data["table"]]["metadata"]["code"]
+					if data["targetfield"].startswith("att"):
+						code = codes[1]
+					else:
+						code = codes[0]
+					code = "'" + code + "_" + data["num"] + "'"
+										
+					for source in imp["importsources"]["importsource"]:
+						if source["name"] == data["targetname"]:
+							sourceexpr = source["representationexpression"] + " + '$' + LOWER(" + code + ")"
+							source["representationexpression"] = sourceexpr
+					for target in imp["importtargets"]["importtarget"]:
+						if target["name"] == data["targetname"]:
+							targetexpr = target["representationexpression"] + " + '$' + LOWER(code)"
+							target["representationexpression"] = targetexpr
+					importreplacement = {
+						"targetfield" : "code",
+						"overwrite" : "always",
+						"newvalue" : code }
+					for couple in imp["importcouples"]["importcouple"]:
+						if couple["importtarget"] == data["targetname"]:
+							couple["importreplacements"]["importreplacement"].append(importreplacement)
+	return imp
+
+
+
+# The function that creates XML files with attributes from the dataset
+#
+
+def dict2xml(d, root_node=None):
+	wrap          =     False if None == root_node or isinstance(d, list) else True
+	root          = 'objects' if None == root_node else root_node
+	root_singular =  root[:-1] if 's' == root[-1] and None == root_node else root
+	xml           = ''
+	children      = []
+	if isinstance(d, dict):
+		for key, value in dict.items(d):
+			if isinstance(value, dict):
+				children.append(dict2xml(value, key))
+			elif isinstance(value, list):
+				children.append(dict2xml(value, key))
+			else:
+				xml = xml + ' ' + key + '="' + str(value) + '"'
+	else:
+		for value in d:
+			children.append(dict2xml(value, root_singular))
+	end_tag = '>' if 0 < len(children) else '/>'
+	if wrap or isinstance(d, dict):
+		xml = '<' + root + xml + end_tag
+	if 0 < len(children):
+		for child in children:
+			xml = xml + child
+		if wrap or isinstance(d, dict):
+			xml = xml + '</' + root + '>'
+	return xml

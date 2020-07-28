@@ -1,0 +1,393 @@
+#!/usr/bin/env python3
+#
+# importmagician
+#
+# Made by Rogier Visser (Laansloot IT)
+# 28 July 2020
+
+import json, re, sys
+from bs4 import BeautifulSoup as bs
+from datetime import datetime
+from openpyxl import load_workbook
+
+filename = sys.argv[1]
+wb = load_workbook(filename, data_only=True)
+
+exec(open('magicfunctions').read())
+dd = "datadict.json"
+with open(dd, "r") as dd:
+	dd = dd.readlines()[5:]
+	dd = ''.join(line.strip() for line in dd)
+	dd = json.loads(dd)
+
+
+
+#
+# Start script
+#
+
+print("")
+print("GENERAL SETTINGS")
+print("--------------------------------------------------------")
+
+now = datetime.now()
+currentdate = now.strftime("%Y%m%d%H%M")
+question = "Name of the new import"
+idname = input(f"{question: <40} -> ")
+
+
+# Set general XML attributes
+idversion = "Laansloot IT" + " [" + currentdate + "]"
+imp["version"] = idversion
+imp["name"] = idname
+ss["date"] = currentdate
+
+
+
+print("")
+print("PARSING THE EXCEL")
+print("--------------------------------------------------------")
+
+numsheets = len(wb.sheetnames)
+if numsheets == 1:
+	sheetname = wb.sheetnames[0]
+	print("Found one sheet: " + sheetname)
+	
+if numsheets > 1:
+	num = 0
+	print("Found " + str(numsheets) + " sheets:")
+	for sheet in wb.sheetnames:
+		num += 1	
+		print(f"   {num: <2} -> " + sheet)
+
+	while True:
+		question = "Enter sheet number to import"
+		sheet = input(f"{question: <40} -> ")
+		sheet = int(sheet)
+		sheet = sheet-1
+		if sheet in range(len(wb.sheetnames)):
+			sheetname = wb.sheetnames[sheet]
+			break
+		else:
+			print("   ERROR: sheet number not found. Try again.\n")
+	print("")
+
+imp["importsources"]["table"] = sheetname
+ss["databasetable"]["databasetablename"] = sheetname
+
+worksheet = wb[sheetname]
+data = {}
+for cell in worksheet[1]:
+	data[cell.value] = cell.col_idx
+print("Found " + str(len(data.keys())) + " columns in sheet " + sheetname)
+print("")
+
+importfields = []
+for column in data.keys():
+	y = worksheet.cell(row=2, column=data[column]).value
+	contenttype = getvaluetype(y)
+	question = "Import {} [{}] (y/n)".format(column, contenttype)
+	include = input(f"{question: <40} -> ")
+	if include.lower() == "y":
+		ssentry = srcstrentry(column,contenttype)
+		importfields.append(ssentry["name"])
+		ss["databasetable"]["fields"]["field"].append(ssentry)
+
+
+
+print("\n")
+print("PRIMARY KEY MAPPING")
+print("--------------------------------------------------------")
+
+# Initialize main data set
+count = 0
+datacontent = {}
+
+# While loop that sets primary key
+while True:
+	question = "Primary key (source field)"
+	importfield = input(f"{question: <40} -> ")
+	if importfield not in importfields:
+		print("   ERROR: source field not found. Try again.\n")
+	else:
+		importfields.remove(importfield)
+		importfieldtype = [x["type"] for x in ss["databasetable"]["fields"]["field"] if x["name"] == importfield]
+		break
+		print("")
+
+# Set source primary key in importdefinition JSON
+sourcesvalidation = "NOT(EMPTY(" + importfield + ") OR ISNULL(" + importfield + "))"
+imp["importsources"]["validation"] = sourcesvalidation
+
+# While loop that adds target table to datacontent
+while True:
+	question = "Primary target table in TOPdesk"
+	targettable = input(f"{question: <40} -> ")
+	if targettable not in dd:
+		print("   ERROR: target table not found. Try again.\n")
+	else:
+		datacontent[targettable] = {}
+		tabledata = inittable(
+			1,
+			importfield,
+			importfieldtype[0],
+			targettable )
+		datacontent[targettable] = tabledata
+		break
+
+
+
+print("")
+print("OTHER MAPPINGS")
+print("--------------------------------------------------------")
+
+# For loop that adds import fields to datacontent
+for importfield in importfields:
+	importfieldtype = [x["type"] for x in ss["databasetable"]["fields"]["field"] if x["name"] == importfield]
+	takenfields1 = [x[1] for x in datacontent[targettable]["mappings"]]
+	takenfields2 = [x[0] for x in datacontent[targettable]["linkflds"]]
+
+	while True:
+		targetfield = setfield(2, targettable, importfield)
+		targetfieldtype = dd[targettable]["fields"][targetfield]["type"]
+		if targetfield in takenfields1 or targetfield in takenfields2:
+			print("   ERROR: target field already taken. Try again.\n")
+		else:		
+			if targetfieldtype != "link":
+				availablemapping = setmapping(
+					importfield,
+					targettable,
+					targetfield,
+					importfieldtype[0] )
+				if availablemapping:
+					mapping = (importfield, targetfield, setoverwrite(targetfield))
+					datacontent[targettable]["mappings"].append(mapping)
+					print("")
+					break
+				else:
+					print("   ERROR: impossible mappings: {} to {}. Try again.\n".format(importfieldtype[0],targetfieldtype))
+			else:
+				break
+
+	if targetfieldtype == "link":
+		linkedtable = dd[targettable]["fields"][targetfield]["link"]["linktable"]
+		if "cardtype" in dd[targettable]["fields"][targetfield]["link"]:
+			cardtype = str(dd[targettable]["fields"][targetfield]["link"]["cardtype"])
+			linkedtabledata = inittable(
+				1,
+				importfield,
+				importfieldtype[0],
+				linkedtable,
+				cardtype )
+		else:
+			linkedtabledata = inittable(
+				1,
+				importfield,
+				importfieldtype[0],
+				linkedtable )
+		if linkedtable in datacontent.keys():
+			count += 1
+			linkedtable = linkedtable + str(count)
+		linkfld = (targetfield, linkedtable)
+		datacontent[targettable]["linkflds"].append(linkfld)
+		datacontent[linkedtable] = linkedtabledata
+
+
+
+print("")
+print("FIELDS TO HARDCODE")
+print("--------------------------------------------------------")
+
+# Add importtype to datacontent
+question = "Set importtype (y/n)"
+importtype = input(f"{question: <40} -> ")
+if importtype.lower() == "y":
+	question = "Enter importtype integer"
+	imptypesrc = input(f"{question: <40} -> ")
+	importtype = (imptypesrc, "importtype", "always")
+	datacontent[targettable]["defaults"].append(importtype)
+
+# While loop that adds fields with default values to datacontent
+while True:
+	print("")
+	question = "Other fields with default values (y/n)"
+	otherfields = input(f"{question: <40} -> ")
+	if otherfields.lower() == "y":
+		takenfields1 = [x[1] for x in datacontent[targettable]["mappings"]]
+		takenfields2 = [x[0] for x in datacontent[targettable]["linkflds"]]
+		takenfields3 = [x[1] for x in datacontent[targettable]["defaults"]]
+		
+		while True:
+			targetfield = setfield(3, targettable)
+			targetfieldtype = dd[targettable]["fields"][targetfield]["type"]
+			if targetfield in takenfields1 or targetfield in takenfields2 or targetfield in takenfields3:
+				print("   ERROR: target field already taken. Try again.\n")
+			else:
+				if targetfieldtype == "boolean":
+					print("Setting boolean field {} to True".format(targetfield))
+					default = ("'.T.'", targetfield, "always")
+					datacontent[targettable]["defaults"].append(default)
+					break
+				elif targetfieldtype == "link":
+					question = "Enter default value"
+					defaultvalue = input(f"{question: <40} -> ")
+					defaultvalue = "'" + defaultvalue + "'"
+					linkedtable = dd[targettable]["fields"][targetfield]["link"]["linktable"]
+					if "cardtype" in dd[targettable]["fields"][targetfield]["link"]:
+						cardtype = str(dd[targettable]["fields"][targetfield]["link"]["cardtype"])
+						tabledata = inittable(
+							2,
+							defaultvalue,
+							"memo",
+							linkedtable,
+							cardtype )
+					else:
+						tabledata = inittable(
+							2,
+							defaultvalue,
+							"memo",
+							linkedtable )
+					if linkedtable in datacontent.keys():
+						count += 1
+						linkedtable = linkedtable + str(count)
+					linkfld = (targetfield, linkedtable)
+					datacontent[targettable]["linkflds"].append(linkfld)
+					datacontent[linkedtable] = tabledata
+					break
+				else:
+					question = "Enter default value"
+					defaultvalue = input(f"{question: <40} -> ")
+					defaultvalue = "'" + defaultvalue + "'"
+					representationexpression = setmapping(
+						defaultvalue,
+						targettable,
+						targetfield,
+						"memo" )
+					default = (representationexpression, targetfield, setoverwrite(targetfield))
+					datacontent[targettable]["defaults"].append(default)
+					break
+	else:
+		break
+
+
+
+#
+# Putting it all together
+#
+
+for table in datacontent.keys():
+	if "defaultvalue" in datacontent[table]:
+		representationexpression = setbaselines(
+			datacontent[table]["defaultvalue"],
+			datacontent[table]["datadict"],
+			datacontent[table]["targetpk"],
+			"memo" )
+	else:
+		fieldtype = [x["type"] for x in ss["databasetable"]["fields"]["field"] if x["name"] == datacontent[table]["sourcepk"]]
+		representationexpression = setbaselines(
+			datacontent[table]["sourcepk"],
+			datacontent[table]["datadict"],
+			datacontent[table]["targetpk"],
+			fieldtype[0] )
+
+	sourceline = {
+		"representationexpression": representationexpression[0],
+		"name": table }
+	imp["importsources"]["importsource"].append(sourceline)
+
+	targetline = {
+		"representationexpression": representationexpression[1],
+		"table": datacontent[table]["datadict"],
+		"sees_archive": datacontent[table]["metadata"][1],
+		"allownew": datacontent[table]["metadata"][0],
+		"name": table }
+	if datacontent[table]["cardtype"]:
+		targetline["status"] = datacontent[table]["cardtype"]
+
+	defaults = [x[1] for x in datacontent[table]["defaults"]]
+	if "importtype" in defaults and datacontent[table]["metadata"][2] == "true":
+		importtype = [x[0] for x in datacontent[table]["defaults"] if x[1] == "importtype"]
+		validationstring = "importtype = " + importtype[0]
+		targetline["removevalidation"] = validationstring
+		targetline["nosource"] = "no_source_archive"
+	imp["importtargets"]["importtarget"].append(targetline)
+
+	importcouple = initimpcpl(table)
+	for mapping in datacontent[table]["mappings"]:	
+		if "defaultvalue" in datacontent[table]:
+			representationexpression = setmapping(
+				mapping[0],
+				datacontent[table]["datadict"],
+				mapping[1],
+				"memo" )
+		else:	
+			fieldtype = [x["type"] for x in ss["databasetable"]["fields"]["field"] if x["name"] == mapping[0]]
+			representationexpression = setmapping(
+				mapping[0],
+				datacontent[table]["datadict"],
+				mapping[1],
+				fieldtype[0] )
+
+		importreplacement = {
+			"targetfield": mapping[1],
+			"overwrite" : mapping[2],
+			"newvalue": representationexpression }
+		importcouple["importreplacements"]["importreplacement"].append(importreplacement)
+
+	for default in datacontent[table]["defaults"]:
+		importreplacement = {
+			"newvalue" : default[0],
+			"targetfield" : default[1],
+			"overwrite" : default[2] }
+		importcouple["importreplacements"]["importreplacement"].append(importreplacement)
+
+	for linkfld in datacontent[table]["linkflds"]:
+		importreplacement = {
+			"targetfield" : linkfld[0],
+			"src_tar_expression" : "source://" + linkfld[1],
+			"overwrite" : "always",
+			"newvalue" : "'UNUSED_LINK_FIELD'",
+			"dst_ref_expression" : "target://" + linkfld[1] }
+		importcouple["importreplacements"]["importreplacement"].append(importreplacement)
+	imp["importcouples"]["importcouple"].append(importcouple)
+
+
+
+#
+# Post-processing
+#
+
+searchtable = "classificatie"
+categorynames = [x["name"] for x in imp["importtargets"]["importtarget"] if x["table"] == searchtable]
+if len(categorynames) == 2:
+	imp = ppcategory(categorynames, imp)
+
+searchtable = "vrijeopzoekvelden"
+optionalfields = [x["name"] for x in imp["importtargets"]["importtarget"] if x["table"] == searchtable]
+if optionalfields:
+	imp = ppoptionalfield(imp, dd)
+
+
+
+#
+# Write to file
+#
+
+print("\n")
+print("CREATING IMPORT FILES")
+print("--------------------------------------------------------")
+
+impfilename = idname.strip() + "-importdefinition.xml"
+ssfilename = idname.strip() + "-sourcestructure.xml"
+
+with open(impfilename, 'w') as file2:
+	finalxml = bs(dict2xml(imp, "importstructure"), features="xml")
+	print(finalxml.prettify(), file=file2)
+
+with open(ssfilename, 'w') as file3:
+	finalxml = bs(dict2xml(ss, "structure"), features="xml")
+	print(finalxml.prettify(), file=file3)
+
+print("Successfully created " + impfilename)
+print("Successfully created " + ssfilename)
+print("")
