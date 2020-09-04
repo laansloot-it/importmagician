@@ -1,6 +1,6 @@
 #
 # TOPdesk 10.02.005
-# Version 202007152105
+# Version 202009042022
 #
 
 {
@@ -5611,6 +5611,10 @@
       "cardtype": [
         1,
         2
+      ],
+      "code": [
+        "CHANGEACT",
+        "CHANGEACT_ATT"
       ]
     }
   },
@@ -6855,6 +6859,10 @@
     "metadata": {
       "cardtype": [
         1
+      ],
+      "code": [
+        "CHANGE",
+        "CHANGE_ATT"
       ]
     }
   },
@@ -29667,6 +29675,10 @@
       "cardtype": [
         1,
         2
+      ],
+      "code": [
+        "OM_ACTIVITY",
+        "OM_ACTIVITY_ATT"
       ]
     }
   },
