@@ -145,9 +145,6 @@ def setcardtype(cardtype, targettable):
 			else:
 				return cardtype
 				break
-	elif cardtype == None and len(dd[targettable]["metadata"]["cardtype"]) == 1:
-		cardtype = 1
-		return cardtype
 	else:
 		return cardtype
 
