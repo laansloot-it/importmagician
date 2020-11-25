@@ -225,7 +225,7 @@ while True:
 			else:
 				if targetfieldtype == "boolean":
 					print("Setting boolean field {} to True".format(targetfield))
-					default = ("'.T.'", targetfield, "always")
+					default = (".T.", targetfield, "always")
 					datacontent[targettable]["defaults"].append(default)
 					break
 				elif targetfieldtype == "link":
